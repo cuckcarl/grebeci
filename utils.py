@@ -111,29 +111,43 @@ def cross_entropy(yhat, y):
     return - nd.log(nd.pick(yhat, y, axis=1, keepdims=True))
 
 
-# def evaluate_accuracy(data_iter, net, ctx):
-#     acc = .0
-#     for data, label in data_iter:
-#         data = data.as_in_context(ctx)
-#         label = label.as_in_context(ctx)
-#         output = net(data)
-#         acc += accuracy(output, label)
-#     return acc / len(data_iter)
+def evaluate_accuracy(data_iter, net, ctx=[mx.cpu()]):
+    acc = .0
+    total_loss = .0
+    n = 0
+    for data, label in data_iter:
+        data = data.as_in_context(ctx)
+        label = label.as_in_context(ctx)
+        output = net(data)
+        prob = softmax(output)
+        loss = cross_entropy(prob, label)
+        total_loss += nd.sum(loss).asscalar()
+        n += loss.shape[0]
+        acc += accuracy(output, label)
+    return acc / len(data_iter), total_loss / n
 
-def evaluate_accuracy(data_iterator, net, ctx=[mx.cpu()]):
-    if isinstance(ctx, mx.Context):
-        ctx = [ctx]
-    acc = nd.array([0])
-    n = 0.
-    if isinstance(data_iterator, mx.io.MXDataIter):
-        data_iterator.reset()
-    for batch in data_iterator:
-        data, label, batch_size = _get_batch(batch, ctx)
-        for X, y in zip(data, label):
-            acc += nd.sum(net(X).argmax(axis=1)==y).copyto(mx.cpu())
-            n += y.size
-        acc.wait_to_read() # don't push too many operators into backend
-    return acc.asscalar() / n
+# def evaluate_accuracy(data_iterator, net, ctx=[mx.cpu()]):
+#     if isinstance(ctx, mx.Context):
+#         ctx = [ctx]
+#     acc = nd.array([0])
+#     n = 0.
+#     total_loss = .0
+#     if isinstance(data_iterator, mx.io.MXDataIter):
+#         data_iterator.reset()
+#     for batch in data_iterator:
+#         data, label, batch_size = _get_batch(batch, ctx)
+
+#         output = net(data)
+#         prob = softmax(output)
+#         loss = cross_entropy(prob, label)
+#         total_loss += nd.sum(loss).asscalar()
+
+#         for X, y in zip(data, label):
+#             acc += nd.sum(net(X).argmax(axis=1)==y).copyto(mx.cpu())
+#             n += y.size
+#             print(y.size)
+#         acc.wait_to_read() # don't push too many operators into backend
+#     return acc.asscalar() / n, total_loss / n
 
 def train(train_data, test_data, net, loss, trainer, ctx, num_epochs, print_batches=None):
     """Train a network"""
@@ -165,7 +179,7 @@ def train(train_data, test_data, net, loss, trainer, ctx, num_epochs, print_batc
                 ))
 
         test_acc = evaluate_accuracy(test_data, net, ctx)
-        print("Epoch %d. Loss: %.3f, Train acc %.2f, Test acc %.2f, Time %.1f sec" % (
+        print("Epoch %d. Loss: %.3f, Train acc %.2f, Test acc %.2f Time %.1f sec" % (
             epoch, train_loss/n, train_acc/m, test_acc, time() - start
         ))
 
