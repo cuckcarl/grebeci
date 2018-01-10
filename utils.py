@@ -8,35 +8,6 @@ import numpy as np
 from time import time
 import matplotlib.pyplot as plt
 
-# class DataLoader(object):
-#     """similiar to gluon.data.DataLoader, but might be faster.
-
-#     The main difference this data loader tries to read more exmaples each
-#     time. But the limits are 1) all examples in dataset have the same shape, 2)
-#     data transfomer needs to process multiple examples at each time
-#     """
-#     def __init__(self, dataset, batch_size, shuffle):
-#         self.dataset = dataset
-#         self.batch_size = batch_size
-#         self.shuffle = shuffle
-
-#     def __iter__(self):
-#         data = self.dataset[:]
-#         X = data[0]
-#         y = nd.array(data[1])
-#         n = X.shape[0]
-#         if self.shuffle:
-#             idx = np.arange(n)
-#             np.random.shuffle(idx)
-#             X = nd.array(X.asnumpy()[idx])
-#             y = nd.array(y.asnumpy()[idx])
-
-#         for i in range(n//self.batch_size):
-#             yield (X[i*self.batch_size:(i+1)*self.batch_size],
-#                    y[i*self.batch_size:(i+1)*self.batch_size])
-
-#     def __len__(self):
-#         return len(self.dataset)//self.batch_size
 
 class DataLoader(object): 
     def __init__(self, dataset, batch_size, shuffle=True, resize=None): 
@@ -63,11 +34,11 @@ class DataLoader(object):
                 for j in range(batch_x.shape[0]):
                     new_data[j] = image.imresize(batch_x[j], resize, resize)
                 batch_x = new_data
-            batch_x = nd.transpose(batch_x.astype('float32')/255, axes=(0, 3, 1, 2))
+            batch_x = nd.transpose(batch_x, axes=(0, 3, 1, 2))
             yield (batch_x, y[i*self.batch_size: (i+1)*self.batch_size])
 
     def __len__(self): 
-        return len(self.dataset)//self.batch_size
+        return len(self.dataset[0])//self.batch_size
             
 
 def load_data_fashion_mnist(batch_size, resize=None, root="~/.mxnet/datasets/fashion-mnist"):
@@ -128,6 +99,26 @@ def _get_batch(batch, ctx):
     return (gluon.utils.split_and_load(data, ctx),
             gluon.utils.split_and_load(label, ctx),
             data.shape[0])
+
+def softmax(X):
+    X_max = nd.max(X, axis=1, keepdims=True)
+    X = X - X_max
+    exp = nd.exp(X)
+    partition = nd.sum(exp, axis=1, keepdims=True)
+    return exp / partition
+
+def cross_entropy(yhat, y):
+    return - nd.log(nd.pick(yhat, y, axis=1, keepdims=True))
+
+
+# def evaluate_accuracy(data_iter, net, ctx):
+#     acc = .0
+#     for data, label in data_iter:
+#         data = data.as_in_context(ctx)
+#         label = label.as_in_context(ctx)
+#         output = net(data)
+#         acc += accuracy(output, label)
+#     return acc / len(data_iter)
 
 def evaluate_accuracy(data_iterator, net, ctx=[mx.cpu()]):
     if isinstance(ctx, mx.Context):
