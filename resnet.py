@@ -16,33 +16,35 @@ from matplotlib import pyplot as plt
 
 num_classes = 2
 
-def try_gpu():
+def try_gpu(): 
     ctx = mx.gpu()
-    try:
+    try: 
         _ = nd.zeros((1, ), ctx=ctx)
-    except:
+    except: 
         ctx = mx.cpu()
     return ctx
 ctx = try_gpu()
 
-class DataLoader(object):
-    def __init__(self, dataset, batch_size, shuffle=True, resize=None):
+class DataLoader(object): 
+    def __init__(self, dataset, batch_size, shuffle=True, resize=None): 
         self.dataset = dataset
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.resize = resize
 
-    def __iter__(self):
+    def __iter__(self): 
         dataset = self.dataset[:]
         X = dataset[0]
         y = nd.array(dataset[1])
+        z = nd.array(dataset[2])
         n = X.shape[0]
         resize = self.resize
-        if self.shuffle:
+        if self.shuffle: 
             idx = np.arange(n)
             np.random.shuffle(idx)
             X = nd.array(X.asnumpy()[idx])
             y = nd.array(y.asnumpy()[idx])
+            z = nd.array(z.asnumpy()[idx])
         for i in range(n//self.batch_size):
             batch_x = X[i*self.batch_size: (i+1)*self.batch_size]
             if resize:
@@ -51,9 +53,9 @@ class DataLoader(object):
                     new_data[j] = image.imresize(batch_x[j], resize, resize)
                 batch_x = new_data
             batch_x = nd.transpose(batch_x, axes=(0, 3, 1, 2))
-            yield (batch_x, y[i*self.batch_size: (i+1)*self.batch_size])
+            yield (batch_x, y[i*self.batch_size: (i+1)*self.batch_size], z[i*self.batch_size: (i+1)*self.batch_size])
 
-    def __len__(self):
+    def __len__(self): 
         return len(self.dataset[0])//self.batch_size
 
 class Residual(gluon.nn.Block):
@@ -67,7 +69,7 @@ class Residual(gluon.nn.Block):
         self.bn_1 = gluon.nn.BatchNorm(axis=1)
         self.bn_2 = gluon.nn.BatchNorm(axis=1)
         if not same_shape:
-            self.conv_3 = gluon.nn.Conv2D(channels=channels, kernel_size=1, strides=strides)
+            self.conv_3 = gluon.nn.Conv2D(channels=channels, kernel_size=3, padding=1, strides=strides)
         if is_dropout:
             self.dropout = gluon.nn.Dropout(0.5)
 
@@ -89,7 +91,6 @@ class Resnet(gluon.nn.Block):
 
             b2 = gluon.nn.Sequential()
             b2.add(
-                gluon.nn.MaxPool2D(pool_size=2),
                 Residual(channels=32),
                 Residual(channels=32)
             )
@@ -137,11 +138,17 @@ class Resnet(gluon.nn.Block):
 
             b6 = gluon.nn.Sequential()
             b6.add(
-                gluon.nn.AvgPool2D(pool_size=2),
+                Residual(channels=512, same_shape=False),
+                Residual(channels=512)
+            )
+            
+            b7 = gluon.nn.Sequential()
+            b7.add(
+                gluon.nn.AvgPool2D(pool_size=3),
                 gluon.nn.Dense(num_classes, activation='sigmoid')
             )
             self.net = gluon.nn.Sequential()
-            self.net.add(b1, b2, b3, b4, b5, b6)
+            self.net.add(b1, b2, b3, b4, b5, b6, b7)
 
     def forward(self, x):
         return self.net(x)
@@ -159,7 +166,7 @@ with net.name_scope():
         nn.Activation(activation='relu'),
         nn.MaxPool2D(pool_size=3, strides=2),
         nn.Dropout(0.5),
-
+        
         nn.Conv2D(channels=64, kernel_size=3, padding=1),
         nn.BatchNorm(axis=1),
         nn.Activation(activation='relu'),
@@ -189,22 +196,53 @@ with net.name_scope():
         nn.Activation(activation='relu'),
         nn.MaxPool2D(pool_size=3, strides=2),
         nn.Dropout(0.5),
-
+        
         nn.Flatten(),
-
+        
         nn.Dense(256),
         nn.BatchNorm(axis=1),
         nn.Activation(activation='relu'),
         nn.Dropout(0.5),
-
+        
         nn.Dense(256),
         nn.BatchNorm(axis=1),
         nn.Activation(activation='relu'),
-        nn.Dropout(0.5),
-        nn.Dense(2)
+        nn.Dropout(0.5)
     )
 net.initialize(init=init.Xavier(), ctx=ctx)
 trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': 0.001})
+
+weight_scale = 0.01
+weight = nd.random_normal(shape=(256, 2), scale=weight_scale, ctx=ctx)
+angle_weight = nd.ones(shape=(1, 2), ctx=ctx)
+bias = nd.zeros(shape=(2, ), ctx=ctx)
+params = [weight, angle_weight, bias]
+for param in params:
+    param.attach_grad()
+weight_v = nd.zeros(shape=(256, 2), ctx=ctx)
+angle_weight_v = nd.zeros(shape=(1, 2), ctx=ctx)
+bias_v = nd.zeros(shape=(2, ), ctx=ctx)
+vs = [weight_v, angle_weight_v, bias_v]
+weight_sqr = nd.zeros(shape=(256, 2), ctx=ctx)
+angle_weight_sqr = nd.zeros(shape=(1, 2), ctx=ctx)
+bias_sqr = nd.zeros(shape=(2, ), ctx=ctx)
+sqrs = [weight_sqr, angle_weight_sqr, bias_sqr]
+
+beta1 = 0.9
+beta2 = 0.999
+eps_stable = 1e-8
+def adam(params, vs, sqrs, lr, batch_size, t):
+    for param, v, sqr in zip(params, vs, sqrs):
+        current_v = beta1 * v + (1 - beta1) * param.grad
+        current_sqr = beta2 * sqr + (1 - beta2) * param.grad * param.grad
+        v[:] = current_v / (1 - beta1**t)
+        sqr[:] = current_sqr / (1 - beta2**t)
+        grad = v / nd.sqrt(sqr + eps_stable)
+        param[:] = param - (lr / batch_size) * grad
+
+def add_angle(X, angle):
+    out = nd.dot(X, weight) + nd.dot(angle.reshape(shape=(-1, 1)), angle_weight) + bias
+    return out
 
 def softmax(X):
     X_max = nd.max(X, axis=1, keepdims=True)
@@ -221,16 +259,14 @@ def accuracy(output, label):
 
 def evaluate_accuracy(data_iter):
     acc = .0
-    total_loss = .0
-    for data, label in data_iter:
+    for data, label, angle in data_iter:
         data = data.as_in_context(ctx)
         label = label.as_in_context(ctx)
-        output = net(data)
-        prob = softmax(output)
-        loss = cross_entropy(prob, label)
-        total_loss += nd.mean(loss).asscalar()
+        angle = angle.as_in_context(ctx)
+        net_out = net(data)
+        output = add_angle(net_out, angle)
         acc += accuracy(output, label)
-    return acc / len(data_iter), total_loss / len(data_iter)
+    return acc / len(data_iter)
 
 def gen_2channel_img():
     with open('./input/train.json') as f:
@@ -269,28 +305,28 @@ def train(train_data, test_data, batch_size):
         total_loss = .0
         train_acc = .0
         start = time.time()
-        batch = 0
-        for data, label in train_data:
+        t = 1
+        for data, label, angle in train_data: 
             data = data.as_in_context(ctx)
             label = label.as_in_context(ctx)
+            angle = angle.as_in_context(ctx)
             with ag.record():
                 net_out = net(data)
-                output = softmax(net_out)
+                angle_out = add_angle(net_out, angle)
+                output = softmax(angle_out)
                 loss = cross_entropy(output, label)
             loss.backward()
+            adam(params, vs, sqrs, 0.001, batch_size, t)
+            t += 1
             trainer.step(batch_size)
             train_acc += accuracy(output, label)
             total_loss += nd.mean(loss).asscalar()
-            if batch % 10 == 0:
-                print('batch %d tarin done.' % batch)
-                sys.stdout.flush()
-            batch += 1
-        test_acc, test_loss = evaluate_accuracy(test_data)
-        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, test_loss: %f, cost_time: %d" % (e, total_loss / len(train_data), \
-              train_acc / len(train_data), test_acc, test_loss, time.time()- start))
+        test_acc = evaluate_accuracy(test_data)
+        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, cost_time: %d" % (e, total_loss / len(train_data), \
+              train_acc / len(train_data), test_acc, time.time()- start))
 
-def augment_data(imags, label):
-    datas, labels = [], []
+def augment_data(imags, label, angle):
+    datas, labels, angles = [], [], []
     n = imags.shape[0]
     for k in range(n):
         imag = imags[k].reshape(shape=(1, imags[k].shape[0], imags[k].shape[1], imags[k].shape[2]))
@@ -301,6 +337,7 @@ def augment_data(imags, label):
             min_val = nd.min(trans_band)
             datas.append((trans_band - min_val) / (max_val - min_val))
             labels.append(label[k].asscalar())
+            angles.append((angle[k].asscalar() - 30.0) / 16.0)
 
         for i in range(9):
             trans_band = transform(imag, image.RandomSizedCropAug((75, 75), .75, (.8, 1.2)))
@@ -309,6 +346,7 @@ def augment_data(imags, label):
             min_val = nd.min(trans_band)
             datas.append((trans_band - min_val) / (max_val - min_val))
             labels.append(label[k].asscalar())
+            angles.append((angle[k].asscalar() - 30.0) / 16.0)
         # brightness augmenter
         for i in range(9):
             trans_band = transform(imag, image.BrightnessJitterAug(.1))
@@ -317,6 +355,7 @@ def augment_data(imags, label):
             min_val = nd.min(trans_band)
             datas.append((trans_band - min_val) / (max_val - min_val))
             labels.append(label[k].asscalar())
+            angles.append((angle[k].asscalar() - 30.0) / 16.0)
         # random crop augmenter
         for i in range(9):
             trans_band = resize(transform(imag, image.RandomCropAug((50,50))), 75)
@@ -325,6 +364,7 @@ def augment_data(imags, label):
             min_val = nd.min(trans_band)
             datas.append((trans_band - min_val) / (max_val - min_val))
             labels.append(label[k].asscalar())
+            angles.append((angle[k].asscalar() - 30.0) / 16.0)
         # center crop augmenter
         trans_band = resize(transform(imag, image.CenterCropAug((50,50))), 75)
         trans_band = trans_band.astype('float32')
@@ -332,28 +372,29 @@ def augment_data(imags, label):
         min_val = nd.min(trans_band)
         datas.append((trans_band - min_val) / (max_val - min_val))
         labels.append(label[k].asscalar())
+        angles.append((angle[k].asscalar() - 30.0) / 16.0)
+        angles = [i if (i >= 0.0 and i <= 1.0) else 0 for i in angles]
     ds = nd.concat(*datas, dim=0)
-    # if is_train:
-    #     max_val = nd.max(ds.astype('float32'))
-    #     min_val = nd.min(ds.astype('float32'))
     # ds = (ds.astype('float32') - min_val) / (max_val - min_val)
     # print("max val after normalizing:", nd.max(ds.astype('float32')))
     # print("min val after normalizing:", nd.min(ds.astype('float32')))
-    return ds, labels
+    return ds, labels, angles
 
 if __name__ == '__main__':
-    datas, labels = [], []
+    datas, labels, angles = [], [], []
     cnt = 0
-    with open('input/train.json') as f:
+    with open('./input/train.json') as f:
         data = json.load(f)
         for img in data:
             name = img['id']
             label = img['is_iceberg']
+            angle = img['inc_angle'] if img['inc_angle'] != 'na' else 0
             band_1 = nd.array(img['band_1']).reshape((1, 75, 75, 1))
             band_2 = nd.array(img['band_2']).reshape((1, 75, 75, 1))
             band = nd.concat(band_1, band_2, dim=3)
             datas.append(band)
             labels.append(label)
+            angles.append(angle)
     ds = nd.concat(*datas, dim=0)
     print("finish load data")
 
@@ -369,26 +410,30 @@ if __name__ == '__main__':
 
     train_ds = (
         nd.array(ds.asnumpy()[train_idx]).astype('float32'),
-        nd.array(np.array(labels)[train_idx]).astype('float32')
+        nd.array(np.array(labels)[train_idx]).astype('float32'),
+        nd.array(np.array(angles)[train_idx]).astype('float32')
         )
     test_ds = (
         nd.array(ds.asnumpy()[test_idx]).astype('float32'),
-        nd.array(np.array(labels)[test_idx]).astype('float32')
+        nd.array(np.array(labels)[test_idx]).astype('float32'),
+        nd.array(np.array(angles)[test_idx]).astype('float32')
         )
-    train_ds_aug, label_train_aug = augment_data(train_ds[0], train_ds[1])
+    train_ds_aug, label_train_aug, angle_train_aug = augment_data(train_ds[0], train_ds[1], train_ds[2])
     # print(label_train_aug)
     train_ds = (
-        train_ds_aug,
-        nd.array(label_train_aug).astype('float32')
+        train_ds_aug.astype('float32'),
+        nd.array(label_train_aug).astype('float32'),
+        nd.array(angle_train_aug).astype('float32')
         )
-    test_ds_aug, label_test_aug = augment_data(test_ds[0], test_ds[1])
+    test_ds_aug, label_test_aug, angle_test_aug = augment_data(test_ds[0], test_ds[1], test_ds[2])
     test_ds = (
-        test_ds_aug,
-        nd.array(label_test_aug).astype('float32')
+        test_ds_aug.astype('float32'),
+        nd.array(label_test_aug).astype('float32'),
+        nd.array(angle_test_aug).astype('float32')
         )
     batch_size = 128
     train_data = DataLoader(train_ds, batch_size, shuffle=True)
     test_data = DataLoader(test_ds, batch_size, shuffle=False)
     print(len(test_ds[0]))
-    sys.stdout.flush()
+
     train(train_data, test_data, batch_size)
