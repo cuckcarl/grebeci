@@ -107,10 +107,10 @@ def train(net_vgg, train_data, valid_data, batch_size, num_epochs, lr, ctx):
         m, s = divmod(remainder, 60)
         time_str = "Time %02d:%02d:%02d" % (h, m, s)
 
-        valid_acc = utils.evaluate_accuracy(valid_data, net_vgg, ctx)
-        epoch_str = ("Epoch %d. Loss: %f, Train acc %f, Valid acc %f, "
+        valid_acc, test_loss = utils.evaluate_accuracy(valid_data, net_vgg, ctx)
+        epoch_str = ("Epoch %d. Loss: %f, Train acc %f, Valid acc %f, Test loss: %f "
                      % (epoch, train_loss / len(train_data),
-                        train_acc / len(train_data), valid_acc))
+                        train_acc / len(train_data), valid_acc, test_loss))
         prev_time = cur_time
         print(epoch_str + time_str + ', lr ' + str(trainer.learning_rate))
         sys.stdout.flush()
@@ -151,61 +151,79 @@ def transform(data, aug):
         data = nd.stack(*[aug(d) for d in data])
     return data
 
+def augment_data(imags, label):
+    datas, labels = [], []
+    n = imags.shape[0]
+    for k in range(n):
+        imag = imags[k].reshape(shape=(1, imags[k].shape[0], imags[k].shape[1], imags[k].shape[2]))
+        for i in range(4):
+            trans_band = transform(imag, image.HorizontalFlipAug(.5))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+
+        for i in range(9):
+            trans_band = transform(imag, image.RandomSizedCropAug((75, 75), .75, (.8, 1.2)))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # brightness augmenter
+        for i in range(9):
+            trans_band = transform(imag, image.BrightnessJitterAug(.1))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # random crop augmenter
+        for i in range(9):
+            trans_band = resize(transform(imag, image.RandomCropAug((50,50))), 75)
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # center crop augmenter
+        trans_band = resize(transform(imag, image.CenterCropAug((50,50))), 75)
+        trans_band = trans_band.astype('float32')
+        max_val = nd.max(trans_band)
+        min_val = nd.min(trans_band)
+        datas.append((trans_band - min_val) / (max_val - min_val))
+        labels.append(label[k].asscalar())
+    ds = nd.concat(*datas, dim=0)
+    # if is_train:
+    #     max_val = nd.max(ds.astype('float32'))
+    #     min_val = nd.min(ds.astype('float32'))
+    # ds = (ds.astype('float32') - min_val) / (max_val - min_val)
+    # print("max val after normalizing:", nd.max(ds.astype('float32')))
+    # print("min val after normalizing:", nd.min(ds.astype('float32')))
+    return ds, labels
+
 if __name__ == '__main__':
     # gen_2channel_img()
     datas, labels = [], []
     cnt = 0
-    aug_hyper_param = [4, 9]
-
-    # source_img = 
-    with open('./input/train.json') as f:
+    with open('input/train.json') as f:
         data = json.load(f)
         for img in data:
             name = img['id']
-            label = 0 if img['is_iceberg'] == 0 else 1
+            label = img['is_iceberg']
             band_1 = nd.array(img['band_1']).reshape((1, 75, 75, 1))
             band_2 = nd.array(img['band_2']).reshape((1, 75, 75, 1))
             band = nd.concat(band_1, band_2, dim=3)
-
-            # source img
-            # datas.append(band)
-            # labels.append(label)
-            # horizon flip augmenter
-            for i in range(aug_hyper_param[0]):
-                trans_band = transform(band, image.HorizontalFlipAug(.5))
-                datas.append(trans_band)
-                labels.append(label)
-
-            for i in range(aug_hyper_param[1]):
-                trans_band = transform(band, image.RandomSizedCropAug((75, 75), .75, (.8, 1.2)))
-                datas.append(trans_band)
-                labels.append(label)
-            # brightness augmenter
-            for i in range(aug_hyper_param[1]):
-                trans_band = transform(band, image.BrightnessJitterAug(.1))
-                datas.append(trans_band)
-                labels.append(label)
-            # random crop augmenter
-            for i in range(aug_hyper_param[1]):
-                trans_band = resize(transform(band, image.RandomCropAug((50,50))), 75)
-                datas.append(trans_band)
-                labels.append(label)
-            # center crop augmenter
-            trans_band = resize(transform(band, image.CenterCropAug((50,50))), 75)
-            datas.append(trans_band)
+            datas.append(band)
             labels.append(label)
-
     ds = nd.concat(*datas, dim=0)
     print("finish load data")
 
-    max_val = nd.max(ds.astype('float32'))
-    min_val = nd.min(ds.astype('float32'))
-    ds = (ds.astype('float32') - min_val) / (max_val - min_val)
-
     num = ds.shape[0]
     idx = np.arange(num)
-    np.random.shuffle(idx)
-    split = num // 4
+    # np.random.shuffle(idx)
+    split = num // 5
     test_idx = idx[:split]
     train_idx = idx[split:]
     print(train_idx.shape)
@@ -213,21 +231,33 @@ if __name__ == '__main__':
     sys.stdout.flush()
 
     train_ds = (
-        nd.array(ds.asnumpy()[train_idx]),
-        nd.array(np.array(labels)[train_idx])
+        nd.array(ds.asnumpy()[train_idx]).astype('float32'),
+        nd.array(np.array(labels)[train_idx]).astype('float32')
         )
     test_ds = (
-        nd.array(ds.asnumpy()[test_idx]),
-        nd.array(np.array(labels)[test_idx])
+        nd.array(ds.asnumpy()[test_idx]).astype('float32'),
+        nd.array(np.array(labels)[test_idx]).astype('float32')
         )
+    train_ds_aug, label_train_aug = augment_data(train_ds[0], train_ds[1])
+    # print(label_train_aug)
+    train_ds = (
+        train_ds_aug,
+        nd.array(label_train_aug).astype('float32')
+        )
+    test_ds_aug, label_test_aug = augment_data(test_ds[0], test_ds[1])
+    test_ds = (
+        test_ds_aug,
+        nd.array(label_test_aug).astype('float32')
+        )    
+    print("finish gen train/test dataset")
+
     batch_size = 128
     train_data = utils.DataLoader(train_ds, batch_size, shuffle=True)
     test_data = utils.DataLoader(test_ds, batch_size, shuffle=False)
 
-    print("finish gen train/test dataset")
-
     ctx = utils.try_gpu()
     num_epochs = 100
+    
     learning_rate = .001
 
     net = Net_vgg10()
