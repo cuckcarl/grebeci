@@ -2,6 +2,7 @@
 #-*- coding: utf-8 -*-
 
 from mxnet import gluon
+from mxnet.gluon import nn
 from mxnet import ndarray as nd
 from mxnet import init
 from mxnet import image
@@ -11,32 +12,33 @@ import time
 import mxnet as mx
 import json
 import sys, datetime
+from matplotlib import pyplot as plt
 
 num_classes = 2
 
-def try_gpu(): 
+def try_gpu():
     ctx = mx.gpu()
-    try: 
+    try:
         _ = nd.zeros((1, ), ctx=ctx)
-    except: 
+    except:
         ctx = mx.cpu()
     return ctx
 ctx = try_gpu()
 
-class DataLoader(object): 
-    def __init__(self, dataset, batch_size, shuffle=True, resize=None): 
+class DataLoader(object):
+    def __init__(self, dataset, batch_size, shuffle=True, resize=None):
         self.dataset = dataset
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.resize = resize
 
-    def __iter__(self): 
+    def __iter__(self):
         dataset = self.dataset[:]
         X = dataset[0]
         y = nd.array(dataset[1])
         n = X.shape[0]
         resize = self.resize
-        if self.shuffle: 
+        if self.shuffle:
             idx = np.arange(n)
             np.random.shuffle(idx)
             X = nd.array(X.asnumpy()[idx])
@@ -51,7 +53,7 @@ class DataLoader(object):
             batch_x = nd.transpose(batch_x, axes=(0, 3, 1, 2))
             yield (batch_x, y[i*self.batch_size: (i+1)*self.batch_size])
 
-    def __len__(self): 
+    def __len__(self):
         return len(self.dataset[0])//self.batch_size
 
 class Residual(gluon.nn.Block):
@@ -65,7 +67,7 @@ class Residual(gluon.nn.Block):
         self.bn_1 = gluon.nn.BatchNorm(axis=1)
         self.bn_2 = gluon.nn.BatchNorm(axis=1)
         if not same_shape:
-            self.conv_3 = gluon.nn.Conv2D(channels=channels, kernel_size=3, padding=1, strides=strides)
+            self.conv_3 = gluon.nn.Conv2D(channels=channels, kernel_size=1, strides=strides)
         if is_dropout:
             self.dropout = gluon.nn.Dropout(0.5)
 
@@ -87,63 +89,120 @@ class Resnet(gluon.nn.Block):
 
             b2 = gluon.nn.Sequential()
             b2.add(
-                Residual(channels=32, is_dropout=True),
-                Residual(channels=32, is_dropout=True)
+                gluon.nn.MaxPool2D(pool_size=2),
+                Residual(channels=32),
+                Residual(channels=32)
             )
 
             b3 = gluon.nn.Sequential()
             b3.add(
                 Residual(channels=64, same_shape=False),
-                Residual(channels=64, is_dropout=True)
+                Residual(channels=64)
             )
+
+            # b4 = gluon.nn.Sequential()
+            # b4.add(
+            #     Residual(channels=64, same_shape=False),
+            #     Residual(channels=64)
+            # )
 
             b4 = gluon.nn.Sequential()
             b4.add(
                 Residual(channels=128, same_shape=False),
-                Residual(channels=128, is_dropout=True)
+                Residual(channels=128)
             )
 
-            b5 = gluon.nn.Sequential()
-            b5.add(
-                Residual(channels=128, same_shape=False),
-                Residual(channels=128, is_dropout=True)
-            )
-
-            b6 = gluon.nn.Sequential()
-            b6.add(
-                gluon.nn.Dense(256, activation='relu'),
-                gluon.nn.BatchNorm(axis=1),
-                gluon.nn.Dropout(0.5),
-                gluon.nn.Dense(256, activation='relu'),
-                gluon.nn.BatchNorm(axis=1),
-                gluon.nn.Dropout(0.5),
-                gluon.nn.Dense(num_classes)
-            )
-
-            # b5 = gluon.nn.Sequential()
-            # b5.add(
-            #     Residual(channels=256, same_shape=False),
-            #     Residual(channels=256)
+            # b6 = gluon.nn.Sequential()
+            # b6.add(
+            #     Residual(channels=128, same_shape=False),
+            #     Residual(channels=128, is_dropout=True)
             # )
 
             # b6 = gluon.nn.Sequential()
             # b6.add(
-            #     Residual(channels=512, same_shape=False),
-            #     Residual(channels=512)
+            #     gluon.nn.Dense(256, activation='relu'),
+            #     gluon.nn.BatchNorm(axis=1),
+            #     gluon.nn.Dropout(0.5),
+            #     gluon.nn.Dense(256, activation='relu'),
+            #     gluon.nn.BatchNorm(axis=1),
+            #     gluon.nn.Dropout(0.5),
+            #     gluon.nn.Dense(num_classes)
             # )
-            
-            # b7 = gluon.nn.Sequential()
-            # b7.add(
-            #     gluon.nn.AvgPool2D(pool_size=3),
-            #     gluon.nn.Dense(num_classes, activation='sigmoid')
-            # )
+
+            b5 = gluon.nn.Sequential()
+            b5.add(
+                Residual(channels=256, same_shape=False),
+                Residual(channels=256)
+            )
+
+            b6 = gluon.nn.Sequential()
+            b6.add(
+                gluon.nn.AvgPool2D(pool_size=2),
+                gluon.nn.Dense(num_classes, activation='sigmoid')
+            )
             self.net = gluon.nn.Sequential()
             self.net.add(b1, b2, b3, b4, b5, b6)
 
     def forward(self, x):
         return self.net(x)
 
-net = Resnet()
+# net = Resnet()
+net = nn.Sequential()
+with net.name_scope():
+    net.add(
+        nn.Conv2D(channels=32, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.2),
+        nn.Conv2D(channels=32, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=3, strides=2),
+        nn.Dropout(0.5),
+
+        nn.Conv2D(channels=64, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.2),
+        nn.Conv2D(channels=64, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=3, strides=2),
+        nn.Dropout(0.5),
+
+        nn.Conv2D(channels=128, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.2),
+        nn.Conv2D(channels=128, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=2),
+        nn.Dropout(0.5),
+
+        nn.Conv2D(channels=128, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.2),
+        nn.Conv2D(channels=128, kernel_size=3, padding=1),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.MaxPool2D(pool_size=3, strides=2),
+        nn.Dropout(0.5),
+
+        nn.Flatten(),
+
+        nn.Dense(256),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.5),
+
+        nn.Dense(256),
+        nn.BatchNorm(axis=1),
+        nn.Activation(activation='relu'),
+        nn.Dropout(0.5),
+        nn.Dense(2)
+    )
 net.initialize(init=init.Xavier(), ctx=ctx)
 trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': 0.001})
 
@@ -162,12 +221,16 @@ def accuracy(output, label):
 
 def evaluate_accuracy(data_iter):
     acc = .0
+    total_loss = .0
     for data, label in data_iter:
         data = data.as_in_context(ctx)
         label = label.as_in_context(ctx)
         output = net(data)
+        prob = softmax(output)
+        loss = cross_entropy(prob, label)
+        total_loss += nd.mean(loss).asscalar()
         acc += accuracy(output, label)
-    return acc / len(data_iter)
+    return acc / len(data_iter), total_loss / len(data_iter)
 
 def gen_2channel_img():
     with open('./input/train.json') as f:
@@ -206,7 +269,8 @@ def train(train_data, test_data, batch_size):
         total_loss = .0
         train_acc = .0
         start = time.time()
-        for data, label in train_data: 
+        batch = 0
+        for data, label in train_data:
             data = data.as_in_context(ctx)
             label = label.as_in_context(ctx)
             with ag.record():
@@ -217,14 +281,70 @@ def train(train_data, test_data, batch_size):
             trainer.step(batch_size)
             train_acc += accuracy(output, label)
             total_loss += nd.mean(loss).asscalar()
-        test_acc = evaluate_accuracy(test_data)
-        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, cost_time: %d" % (e, total_loss / len(train_data), \
-              train_acc / len(train_data), test_acc, time.time()- start))
+            if batch % 10 == 0:
+                print('batch %d tarin done.' % batch)
+                sys.stdout.flush()
+            batch += 1
+        test_acc, test_loss = evaluate_accuracy(test_data)
+        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, test_loss: %f, cost_time: %d" % (e, total_loss / len(train_data), \
+              train_acc / len(train_data), test_acc, test_loss, time.time()- start))
+
+def augment_data(imags, label):
+    datas, labels = [], []
+    n = imags.shape[0]
+    for k in range(n):
+        imag = imags[k].reshape(shape=(1, imags[k].shape[0], imags[k].shape[1], imags[k].shape[2]))
+        for i in range(4):
+            trans_band = transform(imag, image.HorizontalFlipAug(.5))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+
+        for i in range(9):
+            trans_band = transform(imag, image.RandomSizedCropAug((75, 75), .75, (.8, 1.2)))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # brightness augmenter
+        for i in range(9):
+            trans_band = transform(imag, image.BrightnessJitterAug(.1))
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # random crop augmenter
+        for i in range(9):
+            trans_band = resize(transform(imag, image.RandomCropAug((50,50))), 75)
+            trans_band = trans_band.astype('float32')
+            max_val = nd.max(trans_band)
+            min_val = nd.min(trans_band)
+            datas.append((trans_band - min_val) / (max_val - min_val))
+            labels.append(label[k].asscalar())
+        # center crop augmenter
+        trans_band = resize(transform(imag, image.CenterCropAug((50,50))), 75)
+        trans_band = trans_band.astype('float32')
+        max_val = nd.max(trans_band)
+        min_val = nd.min(trans_band)
+        datas.append((trans_band - min_val) / (max_val - min_val))
+        labels.append(label[k].asscalar())
+    ds = nd.concat(*datas, dim=0)
+    # if is_train:
+    #     max_val = nd.max(ds.astype('float32'))
+    #     min_val = nd.min(ds.astype('float32'))
+    # ds = (ds.astype('float32') - min_val) / (max_val - min_val)
+    # print("max val after normalizing:", nd.max(ds.astype('float32')))
+    # print("min val after normalizing:", nd.min(ds.astype('float32')))
+    return ds, labels
 
 if __name__ == '__main__':
     datas, labels = [], []
     cnt = 0
-    with open('./input/train.json') as f:
+    with open('input/train.json') as f:
         data = json.load(f)
         for img in data:
             name = img['id']
@@ -232,52 +352,14 @@ if __name__ == '__main__':
             band_1 = nd.array(img['band_1']).reshape((1, 75, 75, 1))
             band_2 = nd.array(img['band_2']).reshape((1, 75, 75, 1))
             band = nd.concat(band_1, band_2, dim=3)
-            # print(type(label), label)
-            # exit(0)
-
-            # source img
-            # datas.append(band)
-            # labels.append(label)
-            # horizon flip augmenter
-            for i in range(4):
-                trans_band = transform(band, image.HorizontalFlipAug(.5))
-                datas.append(trans_band)
-                labels.append(label)
-
-            for i in range(9):
-                trans_band = transform(band, image.RandomSizedCropAug((75, 75), .75, (.8, 1.2)))
-                datas.append(trans_band)
-                labels.append(label)
-            # brightness augmenter
-            for i in range(9):
-                trans_band = transform(band, image.BrightnessJitterAug(.1))
-                datas.append(trans_band)
-                labels.append(label)
-            # random crop augmenter
-            for i in range(9):
-                trans_band = resize(transform(band, image.RandomCropAug((50,50))), 75)
-                datas.append(trans_band)
-                labels.append(label)
-            # center crop augmenter
-            trans_band = resize(transform(band, image.CenterCropAug((50,50))), 75)
-            datas.append(trans_band)
+            datas.append(band)
             labels.append(label)
-            cnt += 1
-            if cnt % 10 == 0:
-                print("%d source image get done." % cnt)
-                sys.stdout.flush()
     ds = nd.concat(*datas, dim=0)
     print("finish load data")
 
-    max_val = nd.max(ds.astype('float32'))
-    min_val = nd.min(ds.astype('float32'))
-    ds = (ds.astype('float32') - min_val) / (max_val - min_val)
-    print("max val after normalizing:", nd.max(ds.astype('float32')))
-    print("min val after normalizing:", nd.min(ds.astype('float32')))
-
     num = ds.shape[0]
     idx = np.arange(num)
-    np.random.shuffle(idx)
+    # np.random.shuffle(idx)
     split = num // 4
     test_idx = idx[:split]
     train_idx = idx[split:]
@@ -293,8 +375,20 @@ if __name__ == '__main__':
         nd.array(ds.asnumpy()[test_idx]).astype('float32'),
         nd.array(np.array(labels)[test_idx]).astype('float32')
         )
+    train_ds_aug, label_train_aug = augment_data(train_ds[0], train_ds[1])
+    # print(label_train_aug)
+    train_ds = (
+        train_ds_aug,
+        nd.array(label_train_aug).astype('float32')
+        )
+    test_ds_aug, label_test_aug = augment_data(test_ds[0], test_ds[1])
+    test_ds = (
+        test_ds_aug,
+        nd.array(label_test_aug).astype('float32')
+        )
     batch_size = 128
     train_data = DataLoader(train_ds, batch_size, shuffle=True)
     test_data = DataLoader(test_ds, batch_size, shuffle=False)
-
+    print(len(test_ds[0]))
+    sys.stdout.flush()
     train(train_data, test_data, batch_size)
