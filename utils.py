@@ -8,6 +8,30 @@ import numpy as np
 from time import time
 import matplotlib.pyplot as plt
 
+class TestDataLoader(object): 
+    def __init__(self, dataset, batch_size): 
+        self.dataset = dataset
+        self.batch_size = batch_size
+
+    def __iter__(self): 
+        dataset = self.dataset[:]
+        X = dataset[0]
+        y = dataset[1]
+        n = X.shape[0]
+        last_i = 0
+        for i in range(n//self.batch_size):
+            last_i = i
+            batch_x = X[i*self.batch_size: (i+1)*self.batch_size]
+            batch_x = nd.transpose(batch_x, axes=(0, 3, 1, 2))
+            yield (batch_x, y[i*self.batch_size: (i+1)*self.batch_size])
+        batch_x = X[(last_i+1)*self.batch_size:]
+        batch_x = nd.transpose(batch_x, axes=(0, 3, 1, 2))
+        yield (batch_x, y[(last_i+1)*self.batch_size: ])
+
+
+    def __len__(self): 
+        return len(self.dataset[0])//self.batch_size
+
 
 class DataLoader(object): 
     def __init__(self, dataset, batch_size, shuffle=True, resize=None): 
@@ -125,6 +149,19 @@ def evaluate_accuracy(data_iter, net, ctx=[mx.cpu()]):
         n += loss.shape[0]
         acc += accuracy(output, label)
     return acc / len(data_iter), total_loss / n
+
+def predict(data_iter, net, filename, ctx=[mx.cpu()]):
+    
+    outf = open(filename, 'w')
+    for data, iden in data_iter:
+        data = data.as_in_context(ctx)
+        output = net(data)
+        # print(output)
+        prob = softmax(output)
+        for i in range(len(iden)):
+            # print(prob[i])
+            outf.write('%s,%f\n' % (iden[i], prob[i][1].asscalar()))
+
 
 # def evaluate_accuracy(data_iterator, net, ctx=[mx.cpu()]):
 #     if isinstance(ctx, mx.Context):
