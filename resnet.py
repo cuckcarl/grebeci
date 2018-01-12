@@ -251,6 +251,12 @@ def softmax(X):
     partition = nd.sum(exp, axis=1, keepdims=True)
     return exp / partition
 
+def focal_loss(yhat, y, alpha, beta=2.0):
+    alpha = alpha.reshape((1, -1))
+    alpha_matrix = alpha.broadcast_to(shape=yhat.shape)
+    Pt = nd.pick(yhat, y, axis=1, keepdims=True)
+    return - nd.pick(alpha_matrix, y, axis=1, keepdims=True) * ((1.0 - Pt)**beta) * nd.log(Pt)
+
 def cross_entropy(yhat, y):
     return - nd.log(nd.pick(yhat, y, axis=1, keepdims=True))
 
@@ -259,14 +265,18 @@ def accuracy(output, label):
 
 def evaluate_accuracy(data_iter):
     acc = .0
+    logloss = .0
     for data, label, angle in data_iter:
         data = data.as_in_context(ctx)
         label = label.as_in_context(ctx)
         angle = angle.as_in_context(ctx)
         net_out = net(data)
-        output = add_angle(net_out, angle)
-        acc += accuracy(output, label)
-    return acc / len(data_iter)
+        angle_out = add_angle(net_out, angle)
+        output = softmax(angle_out)
+        loss = cross_entropy(output, label)
+        logloss += nd.mean(loss).asscalar()
+        acc += accuracy(angle_out, label)
+    return acc / len(data_iter), logloss / len(data_iter)
 
 def gen_2channel_img():
     with open('./input/train.json') as f:
@@ -300,7 +310,8 @@ def transform(data, aug):
     return data
 
 def train(train_data, test_data, batch_size):
-    epoches = 100
+    epoches = 50
+    alpha = nd.array([0.75, 1.0], ctx=ctx)
     for e in range(epoches):
         total_loss = .0
         train_acc = .0
@@ -314,16 +325,16 @@ def train(train_data, test_data, batch_size):
                 net_out = net(data)
                 angle_out = add_angle(net_out, angle)
                 output = softmax(angle_out)
-                loss = cross_entropy(output, label)
+                loss = focal_loss(output, label, alpha, beta=2.0)
             loss.backward()
             adam(params, vs, sqrs, 0.001, batch_size, t)
             t += 1
             trainer.step(batch_size)
             train_acc += accuracy(output, label)
             total_loss += nd.mean(loss).asscalar()
-        test_acc = evaluate_accuracy(test_data)
-        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, cost_time: %d" % (e, total_loss / len(train_data), \
-              train_acc / len(train_data), test_acc, time.time()- start))
+        test_acc, logloss = evaluate_accuracy(test_data)
+        print("e: %d, train_loss: %f, train_acc: %f, test_acc: %f, logloss: %f, cost_time: %d" % (e, total_loss / len(train_data), \
+              train_acc / len(train_data), test_acc, logloss, time.time()- start))
 
 def augment_data(imags, label, angle):
     datas, labels, angles = [], [], []
@@ -373,7 +384,7 @@ def augment_data(imags, label, angle):
         datas.append((trans_band - min_val) / (max_val - min_val))
         labels.append(label[k].asscalar())
         angles.append((angle[k].asscalar() - 30.0) / 16.0)
-        angles = [i if (i >= 0.0 and i <= 1.0) else 0 for i in angles]
+        angles = [i + 1 if (i >= 0.0 and i <= 1.0) else 0 for i in angles]
     ds = nd.concat(*datas, dim=0)
     # ds = (ds.astype('float32') - min_val) / (max_val - min_val)
     # print("max val after normalizing:", nd.max(ds.astype('float32')))
@@ -401,7 +412,7 @@ if __name__ == '__main__':
     num = ds.shape[0]
     idx = np.arange(num)
     # np.random.shuffle(idx)
-    split = num // 4
+    split = num // 16
     test_idx = idx[:split]
     train_idx = idx[split:]
     print(train_idx.shape)
